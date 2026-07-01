@@ -2,11 +2,15 @@ pipeline {
     agent any
 
     tools {
+        jdk 'jdk17'
         nodejs 'node23'
     }
 
     environment {
         SCANNER_HOME = tool 'sonar-scanner'
+        TMDB_KEY = "cf13e81b2d24d569694fab7e1b28dbb8"
+        IMAGE_NAME = "sharmi2005/netflix-app:latest"
+        CONTAINER_NAME = "netflix-container"
     }
 
     stages {
@@ -17,17 +21,34 @@ pipeline {
             }
         }
 
-        stage('Checkout Code') {
+        stage('Checkout from Git') {
             steps {
                 git branch: 'main',
-                url: 'https://github.com/QuantumVector-sh/DevSecOps-Project.git'
+                    url: 'https://github.com/SHARMI262005/DevSecOps-Project.git'
+            }
+        }
+
+        stage('SonarQube Analysis') {
+            steps {
+                withSonarQubeEnv('sonar-server') {
+                    withCredentials([
+                        string(credentialsId: 'sonar-token', variable: 'SONAR_TOKEN')
+                    ]) {
+                        sh '''
+                        $SCANNER_HOME/bin/sonar-scanner \
+                        -Dsonar.projectKey=netflix \
+                        -Dsonar.projectName=Netflix \
+                        -Dsonar.sources=. \
+                        -Dsonar.host.url=http://3.7.31.86:9000 \
+                        -Dsonar.token=$SONAR_TOKEN
+                        '''
+                    }
+                }
             }
         }
 
         stage('Install Dependencies') {
             steps {
-                sh 'node -v'
-                sh 'npm -v'
                 sh 'npm install --legacy-peer-deps'
             }
         }
@@ -38,51 +59,51 @@ pipeline {
             }
         }
 
-        stage('SonarQube Analysis') {
+        stage('Docker Build & Push') {
             steps {
+                withCredentials([
+                    usernamePassword(
+                        credentialsId: 'docker',
+                        usernameVariable: 'DOCKER_USER',
+                        passwordVariable: 'DOCKER_PASS'
+                    )
+                ]) {
 
-                withSonarQubeEnv('sonar-server') {
+                    sh '''
+                    echo "$DOCKER_PASS" | docker login -u "$DOCKER_USER" --password-stdin
 
-                    withCredentials([
-                        string(
-                            credentialsId: 'Sonar-token',
-                            variable: 'SONAR_TOKEN'
-                        )
-                    ]) {
+                    docker build \
+                      --build-arg TMDB_V3_API_KEY=$TMDB_KEY \
+                      -t netflix-app .
 
-                        sh '''
-                        ${SCANNER_HOME}/bin/sonar-scanner \
-                        -Dsonar.projectKey=netflix \
-                        -Dsonar.projectName=Netflix \
-                        -Dsonar.sources=. \
-                        -Dsonar.host.url=http://13.126.169.21:9000 \
-                        -Dsonar.token=$SONAR_TOKEN
-                        '''
-                    }
+                    docker tag netflix-app $IMAGE_NAME
+
+                    docker push $IMAGE_NAME
+                    '''
                 }
             }
         }
 
-        stage('Docker Build') {
-            steps {
-                sh 'docker build -t netflix-app .'
-            }
-        }
+        stage('Deploy Container') {
+    steps {
+        sh '''
+        docker stop netflix || true
+        docker rm netflix || true
 
-        stage('Stop Old Container') {
-            steps {
-                sh 'docker stop netflix-container || true'
-                sh 'docker rm netflix-container || true'
-            }
-        }
+        docker stop netflix-container || true
+        docker rm netflix-container || true
 
-        stage('Run Container') {
-            steps {
-                sh 'docker run -d -p 3000:80 --name netflix-container netflix-app'
-            }
-        }
+        docker pull sharmi2005/netflix-app:latest
 
-        stage('Verify Container') {
+        docker run -d \
+        --name netflix-container \
+        -p 8081:80 \
+        sharmi2005/netflix-app:latest
+        '''
+    }
+}
+
+        stage('Verify Deployment') {
             steps {
                 sh 'docker ps'
             }
@@ -90,13 +111,23 @@ pipeline {
     }
 
     post {
-
         success {
-            echo '✅ Pipeline Success'
+            echo "======================================="
+            echo "Pipeline Completed Successfully"
+            echo "Docker Image : sharmi2005/netflix-app:latest"
+            echo "Application  : http://3.7.31.86:8081"
+            echo "======================================="
         }
 
         failure {
-            echo '❌ Pipeline Failed'
+            echo "======================================="
+            echo "Pipeline Failed"
+            echo "Check Jenkins Console Output"
+            echo "======================================="
+        }
+
+        always {
+            cleanWs()
         }
     }
 }
